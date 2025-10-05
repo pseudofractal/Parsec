@@ -1,0 +1,4 @@
+name = "test_project"
+uuid = "fe46fda2-06b3-4cd3-b868-4c4d158237ea"
+authors = ["PseudoFractal <kshitishkumarratha@gmail.com>"]
+version = "0.1.0"
