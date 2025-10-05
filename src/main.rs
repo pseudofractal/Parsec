@@ -65,7 +65,6 @@ impl tower_lsp::LanguageServer for Backend {
                 entry.update_text(change.text.into());
             }
         }
-        info!("did_change uri={} bytes={}", uri, bytes);
         self.publish_parse_diagnostics(uri).await;
     }
 
@@ -98,12 +97,38 @@ impl tower_lsp::LanguageServer for Backend {
     ) -> tower_lsp::jsonrpc::Result<Option<Vec<SymbolInformation>>> {
         let q = params.query.to_lowercase();
         let mut out: Vec<SymbolInformation> = Vec::new();
+        let root = self.state.root_path();
+        let search_mode = if q.is_empty() {
+            0
+        } else if q.len() > 2 {
+            2
+        } else {
+            1
+        };
         for kv in self.state.docs.iter() {
             let uri_str = kv.key();
             let uri = match Url::parse(uri_str) {
                 Ok(u) => u,
                 Err(_) => continue,
             };
+            let file_path = uri.to_file_path().ok();
+            if search_mode == 0 {
+                if let (Some(r), Some(p)) = (root.as_ref(), file_path.as_ref()) {
+                    if !p.starts_with(r) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            } else if search_mode == 1 {
+                if let (Some(r), Some(p)) = (root.as_ref(), file_path.as_ref()) {
+                    if !p.starts_with(r) {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
             let syms = symbols::extract_workspace_symbols_with_cache(
                 kv.value(),
                 &*self.state.lang,
@@ -112,12 +137,20 @@ impl tower_lsp::LanguageServer for Backend {
             );
             if q.is_empty() {
                 out.extend(syms);
+            } else if q.len() > 2 {
+                out.extend(
+                    syms.into_iter()
+                        .filter(|s| s.name.to_lowercase().contains(&q)),
+                );
             } else {
                 out.extend(
                     syms.into_iter()
                         .filter(|s| s.name.to_lowercase().contains(&q)),
                 );
             }
+        }
+        if out.len() > 2000 {
+            out.truncate(2000);
         }
         info!("workspace_symbol query='{}' count={}", q, out.len());
         Ok(Some(out))

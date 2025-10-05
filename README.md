@@ -19,14 +19,14 @@ relying on Julia's runtime or heavy compiler infrastructure.
 
 ## Roadmap / TODO
 ### LSP Core
-- [ ] Set up `tower-lsp` server with basic request handlers.
-- [ ] Implement `initialize` and `shutdown` requests.
-- [ ] Add support for `textDocument/didOpen` and `didChange`.
+- [x] Set up `tower-lsp` server with basic request handlers.
+- [x] Implement `initialize` and `shutdown` requests.
+- [x] Add support for `textDocument/didOpen` and `didChange`.
 
 ### Parsing & Diagnostics
-- [ ] Integrate `tree-sitter-julia` for incremental parsing.
-- [ ] Provide syntax diagnostics and error reporting.
-- [ ] Support `textDocument/documentSymbol`.
+- [x] Integrate `tree-sitter-julia` for incremental parsing.
+- [x] Provide syntax diagnostics and error reporting.
+- [x] Support `textDocument/documentSymbol`.
 
 ### Basic Language Features
 - [ ] Implement simple identifier-based completion.

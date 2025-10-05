@@ -1,3 +1,4 @@
+use regex::Regex;
 use std::cmp::Ordering;
 use std::time::Duration;
 use tower_lsp::lsp_types::{
@@ -207,7 +208,116 @@ pub fn extract_workspace_symbols_with_cache(
         let mut cursor = tree.walk();
         collect_workspace_symbols(&text, &idx, &mut cursor, uri, &mut out);
     }
+    out.extend(synthesize_macro_symbols(&text, uri));
+    out.extend(synthesize_shorthand_symbols(&text, uri));
     out
+}
+
+fn synthesize_macro_symbols(text: &str, uri: &Url) -> Vec<SymbolInformation> {
+    let mut out = Vec::new();
+    let re_userplot = Regex::new(r"(?m)^\s*@userplot\s+([A-Za-z][A-Za-z0-9_]*)").unwrap();
+    for cap in re_userplot.captures_iter(text) {
+        let name = cap.get(1).unwrap().as_str().to_string();
+        let (line, col) = line_col_of_match(text, cap.get(1).unwrap().start());
+        out.push(SymbolInformation {
+            name,
+            kind: SymbolKind::FUNCTION,
+            location: Location {
+                uri: uri.clone(),
+                range: Range {
+                    start: Position {
+                        line,
+                        character: col,
+                    },
+                    end: Position {
+                        line,
+                        character: col + 1,
+                    },
+                },
+            },
+            container_name: None,
+            deprecated: None,
+            tags: None,
+        });
+    }
+    let re_recipe_fun =
+        Regex::new(r"(?m)^\s*@recipe\s+function\s+([A-Za-z][A-Za-z0-9_]*)\b").unwrap();
+    for cap in re_recipe_fun.captures_iter(text) {
+        let name = cap.get(1).unwrap().as_str().to_string();
+        let (line, col) = line_col_of_match(text, cap.get(1).unwrap().start());
+        out.push(SymbolInformation {
+            name,
+            kind: SymbolKind::FUNCTION,
+            location: Location {
+                uri: uri.clone(),
+                range: Range {
+                    start: Position {
+                        line,
+                        character: col,
+                    },
+                    end: Position {
+                        line,
+                        character: col + 1,
+                    },
+                },
+            },
+            container_name: None,
+            deprecated: None,
+            tags: None,
+        });
+    }
+    out
+}
+
+fn synthesize_shorthand_symbols(text: &str, uri: &Url) -> Vec<SymbolInformation> {
+    let mut out = Vec::new();
+    let re_anchor = Regex::new(r"(?m)@shorthands").unwrap();
+    let re_name = Regex::new(r"[:]?([A-Za-z][A-Za-z0-9_]*!?)[\s,\]\)]").unwrap();
+    for a in re_anchor.find_iter(text) {
+        let start = a.start();
+        let end = text.len().min(start + 600);
+        let window = &text[start..end];
+        for cap in re_name.captures_iter(window) {
+            let m = cap.get(1).unwrap();
+            let name = m.as_str().to_string();
+            let (line, col) = line_col_of_match(text, start + m.start());
+            out.push(SymbolInformation {
+                name,
+                kind: SymbolKind::FUNCTION,
+                location: Location {
+                    uri: uri.clone(),
+                    range: Range {
+                        start: Position {
+                            line,
+                            character: col,
+                        },
+                        end: Position {
+                            line,
+                            character: col + 1,
+                        },
+                    },
+                },
+                container_name: None,
+                deprecated: None,
+                tags: None,
+            });
+        }
+    }
+    out
+}
+
+fn line_col_of_match(text: &str, byte_idx: usize) -> (u32, u32) {
+    let mut line: u32 = 0;
+    let mut last = 0usize;
+    for (i, _l) in text.match_indices('\n') {
+        if i >= byte_idx {
+            break;
+        }
+        line += 1;
+        last = i + 1;
+    }
+    let col = (byte_idx - last) as u32;
+    (line, col)
 }
 
 fn collect_document_symbols(
