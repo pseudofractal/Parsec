@@ -1,8 +1,10 @@
 use std::cmp::Ordering;
 use std::time::Duration;
-use tower_lsp::lsp_types::{DocumentSymbol, Position, Range, SymbolKind, SymbolTag};
+use tower_lsp::lsp_types::{
+    DocumentSymbol, Location, Position, Range, SymbolInformation, SymbolKind, SymbolTag, Url,
+};
 use tracing::{debug, info, warn};
-use tree_sitter::{Language, Node, TreeCursor};
+use tree_sitter::{Node, TreeCursor};
 
 use crate::state::DocState;
 
@@ -67,10 +69,10 @@ fn is_name_kind(k: &str) -> bool {
     )
 }
 
-fn find_named_descendant_by<'a>(
-    start: Node<'a>,
-    pred: &dyn Fn(&Node<'a>) -> bool,
-) -> Option<Node<'a>> {
+fn find_named_descendant_by<'a, F>(start: Node<'a>, pred: &F) -> Option<Node<'a>>
+where
+    F: Fn(&Node<'a>) -> bool,
+{
     let mut stack = Vec::with_capacity(16);
     stack.push(start);
     while let Some(n) = stack.pop() {
@@ -92,16 +94,16 @@ fn name_node<'a>(node: Node<'a>) -> Option<Node<'a>> {
         return Some(n);
     }
     if let Some(n) = node.child_by_field_name("left") {
-        if let Some(found) = find_named_descendant_by(n, &|m| is_name_kind(m.kind())) {
+        if let Some(found) = find_named_descendant_by(n, &|m: &Node<'a>| is_name_kind(m.kind())) {
             return Some(found);
         }
     }
     if let Some(n) = node.child_by_field_name("signature") {
-        if let Some(found) = find_named_descendant_by(n, &|m| is_name_kind(m.kind())) {
+        if let Some(found) = find_named_descendant_by(n, &|m: &Node<'a>| is_name_kind(m.kind())) {
             return Some(found);
         }
     }
-    find_named_descendant_by(node, &|m| is_name_kind(m.kind()))
+    find_named_descendant_by(node, &|m: &Node<'a>| is_name_kind(m.kind()))
 }
 
 struct Pending {
@@ -110,7 +112,7 @@ struct Pending {
     sym: DocumentSymbol,
 }
 
-fn make_symbol(
+fn make_document_symbol(
     name: String,
     kind: SymbolKind,
     range: Range,
@@ -133,7 +135,7 @@ fn make_symbol(
 
 pub fn extract_document_symbols_with_cache(
     doc: &DocState,
-    lang: &Language,
+    lang: &tree_sitter::Language,
     min_delay: Duration,
 ) -> Vec<DocumentSymbol> {
     doc.parse_with_debounce(lang, min_delay);
@@ -147,7 +149,7 @@ pub fn extract_document_symbols_with_cache(
             tree.root_node().kind()
         );
         let mut cursor = tree.walk();
-        collect_symbols(&text, &idx, &mut cursor, &mut out);
+        collect_document_symbols(&text, &idx, &mut cursor, &mut out);
     } else {
         warn!("no tree after parse");
     }
@@ -191,7 +193,29 @@ pub fn extract_document_symbols_with_cache(
     root
 }
 
-fn collect_symbols(text: &str, idx: &LineIndex, cursor: &mut TreeCursor, out: &mut Vec<Pending>) {
+pub fn extract_workspace_symbols_with_cache(
+    doc: &DocState,
+    lang: &tree_sitter::Language,
+    min_delay: Duration,
+    uri: &Url,
+) -> Vec<SymbolInformation> {
+    doc.parse_with_debounce(lang, min_delay);
+    let text = doc.text();
+    let idx = LineIndex::new(&text);
+    let mut out: Vec<SymbolInformation> = Vec::new();
+    if let Some(tree) = doc.current_tree() {
+        let mut cursor = tree.walk();
+        collect_workspace_symbols(&text, &idx, &mut cursor, uri, &mut out);
+    }
+    out
+}
+
+fn collect_document_symbols(
+    text: &str,
+    idx: &LineIndex,
+    cursor: &mut TreeCursor,
+    out: &mut Vec<Pending>,
+) {
     loop {
         let node = cursor.node();
         debug!(
@@ -210,15 +234,8 @@ fn collect_symbols(text: &str, idx: &LineIndex, cursor: &mut TreeCursor, out: &m
                 out.push(Pending {
                     start: node.start_byte(),
                     end: node.end_byte(),
-                    sym: make_symbol(label.clone(), kind, range, selection_range),
+                    sym: make_document_symbol(label, kind, range, selection_range),
                 });
-                info!(
-                    "match kind={} name={} at {}-{}",
-                    node.kind(),
-                    label,
-                    node.start_byte(),
-                    node.end_byte()
-                );
             } else {
                 warn!(
                     "match without name kind={} bytes={}-{}",
@@ -229,7 +246,48 @@ fn collect_symbols(text: &str, idx: &LineIndex, cursor: &mut TreeCursor, out: &m
             }
         }
         if cursor.goto_first_child() {
-            collect_symbols(text, idx, cursor, out);
+            collect_document_symbols(text, idx, cursor, out);
+            cursor.goto_parent();
+        }
+        if !cursor.goto_next_sibling() {
+            break;
+        }
+    }
+}
+
+fn collect_workspace_symbols(
+    text: &str,
+    idx: &LineIndex,
+    cursor: &mut TreeCursor,
+    uri: &Url,
+    out: &mut Vec<SymbolInformation>,
+) {
+    loop {
+        let node = cursor.node();
+        if let Some(kind) = kind_for(node.kind()) {
+            if let Some(name) = name_node(node) {
+                let name_start = name.start_byte();
+                let name_end = name.end_byte();
+                let range = idx.range_of(node.start_byte(), node.end_byte());
+                let label = text[name_start..name_end].to_string();
+                #[allow(deprecated)]
+                {
+                    out.push(SymbolInformation {
+                        name: label,
+                        kind,
+                        tags: None::<Vec<SymbolTag>>,
+                        deprecated: None,
+                        location: Location {
+                            uri: uri.clone(),
+                            range,
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+        }
+        if cursor.goto_first_child() {
+            collect_workspace_symbols(text, idx, cursor, uri, out);
             cursor.goto_parent();
         }
         if !cursor.goto_next_sibling() {

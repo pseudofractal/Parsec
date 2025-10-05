@@ -33,6 +33,7 @@ impl tower_lsp::LanguageServer for Backend {
                     TextDocumentSyncKind::INCREMENTAL,
                 )),
                 document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -83,6 +84,37 @@ impl tower_lsp::LanguageServer for Backend {
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> tower_lsp::jsonrpc::Result<Option<Vec<SymbolInformation>>> {
+        let q = params.query.to_lowercase();
+        let mut out: Vec<SymbolInformation> = Vec::new();
+        for kv in self.state.docs.iter() {
+            let uri_str = kv.key();
+            let uri = match Url::parse(uri_str) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+            let syms = symbols::extract_workspace_symbols_with_cache(
+                kv.value(),
+                &self.state.lang,
+                self.state.debounce,
+                &uri,
+            );
+            if q.is_empty() {
+                out.extend(syms);
+            } else {
+                out.extend(
+                    syms.into_iter()
+                        .filter(|s| s.name.to_lowercase().contains(&q)),
+                );
+            }
+        }
+        info!("workspace_symbol query='{}' count={}", q, out.len());
+        Ok(Some(out))
+    }
+
     async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
         info!("shutdown");
         Ok(())
@@ -113,11 +145,11 @@ impl Backend {
 #[tokio::main]
 async fn main() {
     let file_appender = rolling::daily("/tmp", "parsec.log");
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(filter)
         .with_writer(file_appender)
         .init();
-    info!("booted parsec LSP");
     info!(
         "boot pid={} argv0={}",
         std::process::id(),
