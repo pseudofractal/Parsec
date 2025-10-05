@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+use std::sync::Arc;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{LspService, Server};
 use tracing::{info, warn};
@@ -13,16 +15,22 @@ use state::ServerState;
 
 struct Backend {
     client: tower_lsp::Client,
-    state: ServerState,
+    state: Arc<ServerState>,
 }
 
 #[tower_lsp::async_trait]
 impl tower_lsp::LanguageServer for Backend {
     async fn initialize(
         &self,
-        _: InitializeParams,
+        params: InitializeParams,
     ) -> tower_lsp::jsonrpc::Result<InitializeResult> {
         info!("initialize");
+        if let Some(root_dir) = workspace_root_from_params(&params) {
+            self.state.set_root(root_dir.clone());
+            self.state.start_indexer(root_dir);
+        } else {
+            warn!("no workspace root provided; background indexer disabled");
+        }
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
                 name: "parsec".into(),
@@ -70,7 +78,7 @@ impl tower_lsp::LanguageServer for Backend {
             Some(entry) => {
                 let res = symbols::extract_document_symbols_with_cache(
                     &*entry,
-                    &self.state.lang,
+                    &*self.state.lang,
                     self.state.debounce,
                 );
                 info!("document_symbol uri={} count={}", uri, res.len());
@@ -98,7 +106,7 @@ impl tower_lsp::LanguageServer for Backend {
             };
             let syms = symbols::extract_workspace_symbols_with_cache(
                 kv.value(),
-                &self.state.lang,
+                &*self.state.lang,
                 self.state.debounce,
                 &uri,
             );
@@ -142,6 +150,18 @@ impl Backend {
     }
 }
 
+fn workspace_root_from_params(params: &InitializeParams) -> Option<PathBuf> {
+    if let Some(folders) = &params.workspace_folders {
+        if let Some(first) = folders.first() {
+            return first.uri.to_file_path().ok();
+        }
+    }
+    if let Some(root_uri) = &params.root_uri {
+        return root_uri.to_file_path().ok();
+    }
+    None
+}
+
 #[tokio::main]
 async fn main() {
     let file_appender = rolling::daily("/tmp", "parsec.log");
@@ -156,9 +176,10 @@ async fn main() {
         std::env::args().next().unwrap_or_default()
     );
     let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
+    let state = Arc::new(ServerState::default());
     let (service, socket) = LspService::new(|client| Backend {
         client,
-        state: ServerState::default(),
+        state: state.clone(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }

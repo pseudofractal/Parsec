@@ -30,4 +30,5 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 tree-sitter = "0.25.10"
 tree-sitter-highlight = "0.25.10"
 tree-sitter-julia = "0.23.1"
+url = "2.5.7"
 

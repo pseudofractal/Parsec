@@ -1040,6 +1040,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-highlight",
  "tree-sitter-julia",
+ "url",
 ]
 
 [[package]]

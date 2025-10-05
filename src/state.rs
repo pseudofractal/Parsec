@@ -1,8 +1,13 @@
 use dashmap::DashMap;
+use ignore::WalkBuilder;
 use parking_lot::RwLock;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::task;
 use tree_sitter::{Language, Parser, Tree};
+use url::Url;
 
 pub struct DocState {
     text: Arc<str>,
@@ -53,23 +58,78 @@ impl DocState {
 }
 
 pub struct ServerState {
-    pub docs: DashMap<String, DocState>,
-    pub lang: Language,
+    pub docs: Arc<DashMap<String, DocState>>,
+    pub lang: Arc<Language>,
     pub debounce: Duration,
+    root: RwLock<Option<PathBuf>>,
 }
 
 impl ServerState {
     pub fn insert_doc(&self, uri: String, text: Arc<str>) {
         self.docs.insert(uri, DocState::new(text));
     }
+
+    pub fn set_root(&self, path: PathBuf) {
+        *self.root.write() = Some(path);
+    }
+
+    pub fn start_indexer(&self, root: PathBuf) {
+        let docs = self.docs.clone();
+        task::spawn_blocking(move || {
+            index_workspace(&root, docs);
+        });
+    }
 }
 
 impl Default for ServerState {
     fn default() -> Self {
         Self {
-            docs: DashMap::new(),
-            lang: tree_sitter_julia::LANGUAGE.into(),
+            docs: Arc::new(DashMap::new()),
+            lang: Arc::new(tree_sitter_julia::LANGUAGE.into()),
             debounce: Duration::from_millis(120),
+            root: RwLock::new(None),
         }
     }
+}
+
+fn index_workspace(root: &Path, docs: Arc<DashMap<String, DocState>>) {
+    let mut types = ignore::types::TypesBuilder::new();
+    types.add_defaults();
+    types.select("jl");
+    types.add("jl", "*.jl").unwrap();
+    let types = types.build().unwrap();
+
+    let walker = WalkBuilder::new(root)
+        .follow_links(false)
+        .hidden(false)
+        .ignore(true)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .types(types)
+        .build();
+
+    for entry in walker {
+        if let Ok(dir_entry) = entry {
+            if let Some(ext) = dir_entry.path().extension() {
+                if ext == "jl" {
+                    if let Ok(text) = fs::read_to_string(dir_entry.path()) {
+                        if let Some(uri) = path_to_file_uri(dir_entry.path()) {
+                            docs.insert(uri, DocState::new(text.into()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn path_to_file_uri(path: &Path) -> Option<String> {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    let url = Url::from_file_path(abs).ok()?;
+    Some(url.to_string())
 }
