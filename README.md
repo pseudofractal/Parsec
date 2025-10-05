@@ -1,4 +1,4 @@
-```markdown
+
 # Parsec
 
 **Parsec** is a lightweight, fast, and minimal Language Server Protocol (LSP)
@@ -51,9 +51,4 @@ relying on Julia's runtime or heavy compiler infrastructure.
 > Expect frequent changes and experimental APIs.
 
 ---
-
-## License
-
-MIT License © 2025
-```
 
