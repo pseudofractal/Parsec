@@ -219,6 +219,7 @@ fn synthesize_macro_symbols(text: &str, uri: &Url) -> Vec<SymbolInformation> {
     for cap in re_userplot.captures_iter(text) {
         let name = cap.get(1).unwrap().as_str().to_string();
         let (line, col) = line_col_of_match(text, cap.get(1).unwrap().start());
+        #[allow(deprecated)]
         out.push(SymbolInformation {
             name,
             kind: SymbolKind::FUNCTION,
@@ -245,6 +246,7 @@ fn synthesize_macro_symbols(text: &str, uri: &Url) -> Vec<SymbolInformation> {
     for cap in re_recipe_fun.captures_iter(text) {
         let name = cap.get(1).unwrap().as_str().to_string();
         let (line, col) = line_col_of_match(text, cap.get(1).unwrap().start());
+        #[allow(deprecated)]
         out.push(SymbolInformation {
             name,
             kind: SymbolKind::FUNCTION,
@@ -281,6 +283,7 @@ fn synthesize_shorthand_symbols(text: &str, uri: &Url) -> Vec<SymbolInformation>
             let m = cap.get(1).unwrap();
             let name = m.as_str().to_string();
             let (line, col) = line_col_of_match(text, start + m.start());
+            #[allow(deprecated)]
             out.push(SymbolInformation {
                 name,
                 kind: SymbolKind::FUNCTION,

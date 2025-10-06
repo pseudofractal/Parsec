@@ -24,12 +24,12 @@ impl tower_lsp::LanguageServer for Backend {
         &self,
         params: InitializeParams,
     ) -> tower_lsp::jsonrpc::Result<InitializeResult> {
-        info!("initialize");
+        info!("Initializing Parsec LSP Server.");
         if let Some(root_dir) = workspace_root_from_params(&params) {
             self.state.set_root(root_dir.clone());
             self.state.start_indexer(root_dir);
         } else {
-            warn!("no workspace root provided; background indexer disabled");
+            warn!("No workspace root is provided. Background indexing is disabled.");
         }
         Ok(InitializeResult {
             server_info: Some(ServerInfo {
@@ -58,10 +58,8 @@ impl tower_lsp::LanguageServer for Backend {
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        let mut bytes = 0usize;
         if let Some(mut entry) = self.state.docs.get_mut(&uri) {
             for change in params.content_changes {
-                bytes = change.text.len();
                 entry.update_text(change.text.into());
             }
         }
@@ -80,7 +78,6 @@ impl tower_lsp::LanguageServer for Backend {
                     &*self.state.lang,
                     self.state.debounce,
                 );
-                info!("document_symbol uri={} count={}", uri, res.len());
                 res
             }
             None => {
@@ -131,7 +128,7 @@ impl tower_lsp::LanguageServer for Backend {
             }
             let syms = symbols::extract_workspace_symbols_with_cache(
                 kv.value(),
-                &*self.state.lang,
+                &self.state.lang,
                 self.state.debounce,
                 &uri,
             );
@@ -152,12 +149,11 @@ impl tower_lsp::LanguageServer for Backend {
         if out.len() > 2000 {
             out.truncate(2000);
         }
-        info!("workspace_symbol query='{}' count={}", q, out.len());
         Ok(Some(out))
     }
 
     async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
-        info!("shutdown");
+        info!("Shutting Down Parsec LSP Server.");
         Ok(())
     }
 }
