@@ -28,15 +28,16 @@ relying on Julia's runtime or heavy compiler infrastructure.
 - [x] Provide syntax diagnostics and error reporting.
 - [x] Support `textDocument/documentSymbol`.
 
+### Indexing & Workspace
+- [x] Build a per-file symbol index.
+- [x] Support cross-file symbol lookup.
+- [x] Implement `workspace/symbol` fuzzily.
+
 ### Basic Language Features
-- [ ] Implement simple identifier-based completion.
+- [ ] Implement simple completion.
 - [ ] Add basic `go to definition` using lexical scope heuristics.
 - [ ] Provide hover information with docstring extraction.
 
-### Indexing & Workspace
-- [ ] Build a per-file symbol index.
-- [ ] Support cross-file symbol lookup.
-- [ ] Implement `workspace/symbol`.
 
 ### Extras (Optional)
 - [ ] Add rename support (best-effort, index-based).
