@@ -1,3 +1,5 @@
+use crate::index::SymbolIndex;
+use crate::symbols;
 use dashmap::DashMap;
 use ignore::WalkBuilder;
 use parking_lot::RwLock;
@@ -63,6 +65,7 @@ pub struct ServerState {
     pub lang: Arc<Language>,
     pub debounce: Duration,
     root: RwLock<Option<PathBuf>>,
+    pub symbols: Arc<SymbolIndex>,
 }
 
 impl ServerState {
@@ -80,15 +83,20 @@ impl ServerState {
 
     pub fn start_indexer(&self, root: PathBuf) {
         let docs = self.docs.clone();
+        let lang = self.lang.clone();
+        let debounce = self.debounce;
+        let symbols = self.symbols.clone();
+
         let mut roots = vec![root.clone()];
         roots.extend(discover_env_roots(&root));
         let mut handles = Vec::new();
 
         for r in roots {
             let docs_cloned = docs.clone();
-            let r_for_log = r.clone();
+            let lang = lang.clone();
+            let symbols = symbols.clone();
             let handle = task::spawn_blocking(move || {
-                index_workspace(&r_for_log, docs_cloned);
+                index_workspace(&r, docs_cloned, &lang, debounce, &symbols);
             });
             handles.push(handle);
         }
@@ -97,6 +105,20 @@ impl ServerState {
                 let _ = h.await;
             }
         });
+    }
+
+    pub fn reindex_doc(&self, uri_str: &str) {
+        if let Ok(url) = Url::parse(uri_str) {
+            if let Some(entry) = self.docs.get(uri_str) {
+                let syms = symbols::extract_workspace_symbols_with_cache(
+                    &entry,
+                    &self.lang,
+                    self.debounce,
+                    &url,
+                );
+                self.symbols.upsert_doc(&url, syms);
+            }
+        }
     }
 }
 
@@ -107,11 +129,18 @@ impl Default for ServerState {
             lang: Arc::new(tree_sitter_julia::LANGUAGE.into()),
             debounce: Duration::from_millis(120),
             root: RwLock::new(None),
+            symbols: Arc::new(SymbolIndex::default()),
         }
     }
 }
 
-fn index_workspace(root: &Path, docs: Arc<DashMap<String, DocState>>) {
+fn index_workspace(
+    root: &Path,
+    docs: Arc<DashMap<String, DocState>>,
+    lang: &Language,
+    debounce: Duration,
+    symbols: &SymbolIndex,
+) {
     let mut types = ignore::types::TypesBuilder::new();
     types.add_defaults();
     types.select("jl");
@@ -153,7 +182,15 @@ fn index_workspace(root: &Path, docs: Arc<DashMap<String, DocState>>) {
                 }
                 if let Ok(text) = fs::read_to_string(path) {
                     if let Some(uri) = path_to_file_uri(path) {
-                        docs.insert(uri, DocState::new(text.into()));
+                        docs.insert(uri.clone(), DocState::new(text.into()));
+                        if let Ok(url) = Url::parse(&uri) {
+                            if let Some(doc) = docs.get(&uri) {
+                                let syms = crate::symbols::extract_workspace_symbols_with_cache(
+                                    &doc, lang, debounce, &url,
+                                );
+                                symbols.upsert_doc(&url, syms);
+                            }
+                        }
                     }
                 }
             }

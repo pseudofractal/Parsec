@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{LspService, Server};
 use tracing::{info, warn};
@@ -7,6 +8,7 @@ use tracing_appender::rolling;
 use tracing_subscriber::EnvFilter;
 
 mod diagnostics;
+mod index;
 mod parse;
 mod state;
 mod symbols;
@@ -53,6 +55,7 @@ impl tower_lsp::LanguageServer for Backend {
         let text = params.text_document.text;
         info!("did_open uri={} bytes={}", uri, text.len());
         self.state.insert_doc(uri.clone(), text.into());
+        self.state.reindex_doc(&uri);
         self.publish_parse_diagnostics(uri).await;
     }
 
@@ -63,6 +66,7 @@ impl tower_lsp::LanguageServer for Backend {
                 entry.update_text(change.text.into());
             }
         }
+        self.state.reindex_doc(&uri);
         self.publish_parse_diagnostics(uri).await;
     }
 
@@ -74,8 +78,8 @@ impl tower_lsp::LanguageServer for Backend {
         let symbols = match self.state.docs.get(&uri) {
             Some(entry) => {
                 let res = symbols::extract_document_symbols_with_cache(
-                    &*entry,
-                    &*self.state.lang,
+                    &entry,
+                    &self.state.lang,
                     self.state.debounce,
                 );
                 res
@@ -92,64 +96,24 @@ impl tower_lsp::LanguageServer for Backend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> tower_lsp::jsonrpc::Result<Option<Vec<SymbolInformation>>> {
-        let q = params.query.to_lowercase();
-        let mut out: Vec<SymbolInformation> = Vec::new();
+        let t0 = Instant::now();
+
+        let q = params.query.clone();
+        let limit = 2000usize;
         let root = self.state.root_path();
-        let search_mode = if q.is_empty() {
-            0
-        } else if q.len() > 2 {
-            2
+        let root_filter = if q.is_empty() || q.len() <= 2 {
+            root.as_deref()
         } else {
-            1
+            None
         };
-        for kv in self.state.docs.iter() {
-            let uri_str = kv.key();
-            let uri = match Url::parse(uri_str) {
-                Ok(u) => u,
-                Err(_) => continue,
-            };
-            let file_path = uri.to_file_path().ok();
-            if search_mode == 0 {
-                if let (Some(r), Some(p)) = (root.as_ref(), file_path.as_ref()) {
-                    if !p.starts_with(r) {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            } else if search_mode == 1 {
-                if let (Some(r), Some(p)) = (root.as_ref(), file_path.as_ref()) {
-                    if !p.starts_with(r) {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-            let syms = symbols::extract_workspace_symbols_with_cache(
-                kv.value(),
-                &self.state.lang,
-                self.state.debounce,
-                &uri,
-            );
-            if q.is_empty() {
-                out.extend(syms);
-            } else if q.len() > 2 {
-                out.extend(
-                    syms.into_iter()
-                        .filter(|s| s.name.to_lowercase().contains(&q)),
-                );
-            } else {
-                out.extend(
-                    syms.into_iter()
-                        .filter(|s| s.name.to_lowercase().contains(&q)),
-                );
-            }
-        }
-        if out.len() > 2000 {
-            out.truncate(2000);
-        }
-        Ok(Some(out))
+
+        let results = self.state.symbols.search_fuzzy(&q, root_filter, limit);
+        tracing::info!(
+            "Workspace Symbol Request: Query='{q}' Count={} Time={:?}",
+            results.len(),
+            t0.elapsed()
+        );
+        Ok(Some(results))
     }
 
     async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
